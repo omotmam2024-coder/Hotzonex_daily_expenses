@@ -11,11 +11,13 @@ export default function Shop() {
         <button className={'btn ' + (tab === 'tabs' ? '' : 'ghost')} onClick={() => setTab('tabs')}>💳 Open Tabs</button>
         <button className={'btn ' + (tab === 'orders' ? '' : 'ghost')} onClick={() => setTab('orders')}>Sales History</button>
         <button className={'btn ' + (tab === 'products' ? '' : 'ghost')} onClick={() => setTab('products')}>Products / Stock</button>
+        <button className={'btn ' + (tab === 'intake' ? '' : 'ghost')} onClick={() => setTab('intake')}>📋 Stock Entry</button>
       </div>
       {tab === 'pos' && <POS />}
       {tab === 'tabs' && <Tabs />}
       {tab === 'orders' && <Orders />}
       {tab === 'products' && <Products />}
+      {tab === 'intake' && <StockIntake />}
     </>
   );
 }
@@ -386,6 +388,92 @@ function Products() {
       {editing && <ProductForm row={editing} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); load(); }} />}
       {restock && <RestockForm product={restock} onClose={() => setRestock(null)} onSaved={() => { setRestock(null); load(); }} />}
       {confirmNode}
+    </div>
+  );
+}
+
+/* --------------------- Stock Entry (spreadsheet form) -------------------- */
+function StockIntake() {
+  const blank = () => ({ key: Math.random().toString(36).slice(2), name: '', units: '', cost_per_unit: '', pieces_per_unit: '', price_per_piece: '' });
+  const [rows, setRows] = useState([blank(), blank(), blank()]);
+  const [err, setErr] = useState('');
+  const [saved, setSaved] = useState(0);
+
+  const calc = (r) => {
+    const u = Number(r.units) || 0, cpu = Number(r.cost_per_unit) || 0, ppu = Number(r.pieces_per_unit) || 0, pp = Number(r.price_per_piece) || 0;
+    const total_cost = u * cpu, exp_sales = u * ppu * pp;
+    return { total_cost, exp_sales, profit: exp_sales - total_cost };
+  };
+  const totals = rows.reduce((a, r) => { const c = calc(r); return { tc: a.tc + c.total_cost, es: a.es + c.exp_sales, pr: a.pr + c.profit }; }, { tc: 0, es: 0, pr: 0 });
+
+  const set = (key, k, v) => setRows((rs) => rs.map((r) => (r.key === key ? { ...r, [k]: v } : r)));
+  const addRow = () => setRows((rs) => [...rs, blank()]);
+  const removeRow = (key) => setRows((rs) => (rs.length > 1 ? rs.filter((r) => r.key !== key) : rs));
+
+  async function saveAll() {
+    setErr(''); setSaved(0);
+    const toSave = rows.filter((r) => r.name.trim());
+    if (toSave.length === 0) { setErr('Type at least one item name first'); return; }
+    try {
+      for (const r of toSave) await api('/products', { method: 'POST', body: r });
+      setSaved(toSave.length);
+      setRows([blank(), blank(), blank()]);
+    } catch (e) { setErr(e.message); }
+  }
+
+  const cell = { padding: '4px 6px' };
+  const inp = { padding: '6px 8px', textAlign: 'right', minWidth: 84 };
+
+  return (
+    <div className="panel">
+      <div className="panel-head">
+        <h3>📋 Stock Entry — add items in rows</h3>
+        <div className="toolbar">
+          <button className="btn ghost" onClick={addRow}>+ Add row</button>
+          <button className="btn success" onClick={saveAll}>Save all items</button>
+        </div>
+      </div>
+      <div className="panel-body" style={{ padding: 0, overflowX: 'auto' }}>
+        {saved > 0 && <div className="error" style={{ margin: 12, background: '#dcfce7', color: '#15803d' }}>✅ Saved {saved} item(s) — they're now in Products, the POS and the daily sheet.</div>}
+        {err && <div className="error" style={{ margin: 12 }}>{err}</div>}
+        <table style={{ minWidth: 920 }}>
+          <thead>
+            <tr>
+              <th style={{ minWidth: 150 }}>Item</th><th className="num">Units</th><th className="num">Cost / Unit</th>
+              <th className="num">Pieces / Unit</th><th className="num">Price / Piece</th>
+              <th className="num">Total Cost</th><th className="num">Exp. Sales</th><th className="num">Profit</th><th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r) => {
+              const c = calc(r);
+              return (
+                <tr key={r.key}>
+                  <td style={cell}><input value={r.name} onChange={(e) => set(r.key, 'name', e.target.value)} placeholder="Item name" /></td>
+                  <td style={cell}><input type="number" min="0" value={r.units} onChange={(e) => set(r.key, 'units', e.target.value)} placeholder="0" style={inp} /></td>
+                  <td style={cell}><input type="number" step="0.01" value={r.cost_per_unit} onChange={(e) => set(r.key, 'cost_per_unit', e.target.value)} placeholder="0" style={inp} /></td>
+                  <td style={cell}><input type="number" min="1" value={r.pieces_per_unit} onChange={(e) => set(r.key, 'pieces_per_unit', e.target.value)} placeholder="0" style={inp} /></td>
+                  <td style={cell}><input type="number" step="0.01" value={r.price_per_piece} onChange={(e) => set(r.key, 'price_per_piece', e.target.value)} placeholder="0" style={inp} /></td>
+                  <td className="num">{c.total_cost ? money(c.total_cost) : '—'}</td>
+                  <td className="num" style={{ color: 'var(--brand)' }}>{c.exp_sales ? money(c.exp_sales) : '—'}</td>
+                  <td className="num" style={{ color: c.profit >= 0 ? 'var(--green)' : 'var(--red)', fontWeight: 600 }}>{c.exp_sales ? money(c.profit) : '—'}</td>
+                  <td className="num"><button className="icon-btn" onClick={() => removeRow(r.key)}>✕</button></td>
+                </tr>
+              );
+            })}
+            <tr style={{ background: 'var(--surface-2)', fontWeight: 700 }}>
+              <td colSpan={5} style={{ padding: '10px 14px' }}>TOTAL ({rows.filter((r) => r.name.trim()).length} item(s))</td>
+              <td className="num">{money(totals.tc)}</td>
+              <td className="num" style={{ color: 'var(--brand)' }}>{money(totals.es)}</td>
+              <td className="num" style={{ color: 'var(--green)' }}>{money(totals.pr)}</td>
+              <td></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <div style={{ padding: 14, borderTop: '1px solid var(--border)', color: 'var(--muted)', fontSize: 12.5 }}>
+        Each item starts with stock = Units × Pieces/Unit. Leave a row blank to skip it.
+      </div>
     </div>
   );
 }
