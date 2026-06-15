@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { getToken, getUser, clearSession } from './api.js';
 import Login from './pages/Login.jsx';
 import Dashboard from './pages/Dashboard.jsx';
+import DailyEntry from './pages/DailyEntry.jsx';
 import Expenses from './pages/Expenses.jsx';
 import Income from './pages/Income.jsx';
 import Shop from './pages/Shop.jsx';
@@ -13,6 +14,7 @@ import Settings from './pages/Settings.jsx';
 
 const NAV = [
   { id: 'dashboard', label: 'Dashboard', icon: '📊', C: Dashboard },
+  { id: 'daily', label: 'Bar Daily Entry', icon: '🍺', C: DailyEntry },
   { id: 'expenses', label: 'Expenses', icon: '💸', C: Expenses },
   { id: 'income', label: 'Income', icon: '💰', C: Income },
   { id: 'shop', label: 'Shop & Sales', icon: '🥤', C: Shop },
