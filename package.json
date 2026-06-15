@@ -1,0 +1,16 @@
+{
+  "name": "hotzonex-daily-expenses",
+  "version": "1.0.0",
+  "description": "Daily expense, income, shop sales and customer debt tracker for Hotzonex",
+  "type": "module",
+  "scripts": {
+    "dev:server": "node --disable-warning=ExperimentalWarning server/index.js",
+    "dev:client": "npm --prefix client run dev",
+    "build": "npm --prefix client install && npm --prefix client run build",
+    "start": "node --disable-warning=ExperimentalWarning server/index.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "jsonwebtoken": "^9.0.2"
+  }
+}
