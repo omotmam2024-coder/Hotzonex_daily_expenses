@@ -136,6 +136,11 @@ export function initDb() {
   };
   ensureColumn('sales', 'order_id', 'INTEGER');
   ensureColumn('debts', 'order_id', 'INTEGER');
+  // bar stock-intake model: a product is bought in `units` (cartons/crates), each
+  // holding `pieces_per_unit` sellable pieces, at `cost_per_unit` to buy.
+  ensureColumn('products', 'units', 'INTEGER NOT NULL DEFAULT 0');
+  ensureColumn('products', 'cost_per_unit', 'REAL NOT NULL DEFAULT 0');
+  ensureColumn('products', 'pieces_per_unit', 'INTEGER NOT NULL DEFAULT 1');
 
   // seed default admin
   const admin = db.prepare('SELECT id FROM users WHERE username = ?').get('admin');

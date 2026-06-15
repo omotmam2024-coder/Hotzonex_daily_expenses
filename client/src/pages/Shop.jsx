@@ -331,25 +331,38 @@ function Products() {
   function load() { api('/products').then(setRows).catch(() => {}); }
   useEffect(() => { load(); }, []);
 
-  const stockValue = rows.reduce((a, p) => a + p.stock * p.cost, 0);
+  const t = rows.reduce((a, p) => ({
+    cost: a.cost + p.total_cost, sales: a.sales + p.exp_sales, profit: a.profit + p.profit,
+  }), { cost: 0, sales: 0, profit: 0 });
 
   return (
     <div className="panel">
       <div className="panel-head">
-        <h3>Products / Stock <span style={{ color: 'var(--muted)', fontWeight: 400, fontSize: 13 }}>· stock worth {money(stockValue)}</span></h3>
-        <button className="btn" onClick={() => setEditing({ name: '', price: '', cost: '', stock: '' })}>+ Add Product</button>
+        <h3>Products / Stock</h3>
+        <button className="btn" onClick={() => setEditing({ blank: true })}>+ Add Item</button>
       </div>
-      <div className="panel-body" style={{ padding: 0 }}>
+      <div className="panel-body" style={{ padding: 0, overflowX: 'auto' }}>
         <table>
-          <thead><tr><th>Name</th><th className="num">Cost</th><th className="num">Price</th><th className="num">Margin</th><th className="num">Stock</th><th></th></tr></thead>
+          <thead>
+            <tr>
+              <th>Item</th><th className="num">Units</th><th className="num">Cost / Unit</th>
+              <th className="num">Pieces / Unit</th><th className="num">Price / Piece</th>
+              <th className="num">Total Cost</th><th className="num">Exp. Sales</th>
+              <th className="num">Profit</th><th className="num">In Stock</th><th></th>
+            </tr>
+          </thead>
           <tbody>
-            {rows.length === 0 && <tr><td colSpan={6} className="empty">No products yet</td></tr>}
+            {rows.length === 0 && <tr><td colSpan={10} className="empty">No items yet — click “+ Add Item”</td></tr>}
             {rows.map((p) => (
               <tr key={p.id}>
                 <td>{p.name}</td>
-                <td className="num">{money(p.cost)}</td>
+                <td className="num">{p.units}</td>
+                <td className="num">{money(p.cost_per_unit)}</td>
+                <td className="num">{p.pieces_per_unit}</td>
                 <td className="num">{money(p.price)}</td>
-                <td className="num">{money(p.price - p.cost)}</td>
+                <td className="num">{money(p.total_cost)}</td>
+                <td className="num" style={{ color: 'var(--brand)' }}>{money(p.exp_sales)}</td>
+                <td className="num" style={{ color: 'var(--green)', fontWeight: 600 }}>{money(p.profit)}</td>
                 <td className="num">{p.stock <= 5 ? <span className="badge amber">{p.stock}</span> : p.stock}</td>
                 <td className="num" style={{ whiteSpace: 'nowrap' }}>
                   <button className="btn ghost sm" onClick={() => setRestock(p)}>+ Stock</button>
@@ -358,6 +371,15 @@ function Products() {
                 </td>
               </tr>
             ))}
+            {rows.length > 0 && (
+              <tr style={{ background: 'var(--surface-2)', fontWeight: 700 }}>
+                <td colSpan={5}>TOTAL</td>
+                <td className="num">{money(t.cost)}</td>
+                <td className="num" style={{ color: 'var(--brand)' }}>{money(t.sales)}</td>
+                <td className="num" style={{ color: 'var(--green)' }}>{money(t.profit)}</td>
+                <td colSpan={2}></td>
+              </tr>
+            )}
           </tbody>
         </table>
       </div>
@@ -368,13 +390,36 @@ function Products() {
   );
 }
 
+// shared live summary of total cost / expected sales / profit
+function CalcSummary({ units, costPerUnit, piecesPerUnit, pricePerPiece }) {
+  const u = Number(units) || 0, cpu = Number(costPerUnit) || 0, ppu = Number(piecesPerUnit) || 0, pp = Number(pricePerPiece) || 0;
+  const totalCost = u * cpu;
+  const expSales = u * ppu * pp;
+  const profit = expSales - totalCost;
+  return (
+    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 10, marginTop: 6 }}>
+      <div className="card" style={{ padding: 12 }}><div className="label">Total cost</div><div style={{ fontSize: 18, fontWeight: 700 }}>{money(totalCost)}</div></div>
+      <div className="card" style={{ padding: 12 }}><div className="label">Exp. sales</div><div style={{ fontSize: 18, fontWeight: 700, color: 'var(--brand)' }}>{money(expSales)}</div></div>
+      <div className="card" style={{ padding: 12 }}><div className="label">Profit</div><div style={{ fontSize: 18, fontWeight: 700, color: profit >= 0 ? 'var(--green)' : 'var(--red)' }}>{money(profit)}</div></div>
+    </div>
+  );
+}
+
 function ProductForm({ row, onClose, onSaved }) {
-  const [f, setF] = useState({ ...row });
+  const [f, setF] = useState({
+    name: row.name || '',
+    units: row.units ?? '',
+    cost_per_unit: row.cost_per_unit ?? '',
+    pieces_per_unit: row.pieces_per_unit ?? '',
+    price_per_piece: row.price ?? '',
+  });
   const [err, setErr] = useState('');
   const set = (k) => (e) => setF({ ...f, [k]: e.target.value });
+  const isNew = !row.id;
 
   async function save() {
     setErr('');
+    if (!f.name.trim()) { setErr('Item name is required'); return; }
     try {
       if (row.id) await api(`/products/${row.id}`, { method: 'PUT', body: f });
       else await api('/products', { method: 'POST', body: f });
@@ -383,39 +428,48 @@ function ProductForm({ row, onClose, onSaved }) {
   }
 
   return (
-    <Modal title={row.id ? 'Edit product' : 'Add product'} onClose={onClose}
-      footer={<><button className="btn ghost" onClick={onClose}>Cancel</button><button className="btn" onClick={save}>Save</button></>}>
+    <Modal wide title={isNew ? 'Add item' : 'Edit item'} onClose={onClose}
+      footer={<><button className="btn ghost" onClick={onClose}>Cancel</button><button className="btn" onClick={save}>{isNew ? 'Add item' : 'Save'}</button></>}>
       <ErrorMsg>{err}</ErrorMsg>
-      <Field label="Name"><input value={f.name} onChange={set('name')} autoFocus placeholder="e.g. Coca-Cola 50cl" /></Field>
+      <Field label="Item name"><input value={f.name} onChange={set('name')} autoFocus placeholder="e.g. Tusker" /></Field>
       <div className="form-row">
-        <Field label="Cost price (SSP)"><input type="number" step="0.01" value={f.cost} onChange={set('cost')} /></Field>
-        <Field label="Selling price (SSP)"><input type="number" step="0.01" value={f.price} onChange={set('price')} /></Field>
-        <Field label="Stock qty"><input type="number" value={f.stock} onChange={set('stock')} /></Field>
+        <Field label="Units (cartons/crates)"><input type="number" min="0" value={f.units} onChange={set('units')} placeholder="0" /></Field>
+        <Field label="Cost / Unit (SSP)"><input type="number" step="0.01" value={f.cost_per_unit} onChange={set('cost_per_unit')} placeholder="0" /></Field>
       </div>
+      <div className="form-row">
+        <Field label="Pieces / Unit"><input type="number" min="1" value={f.pieces_per_unit} onChange={set('pieces_per_unit')} placeholder="e.g. 24" /></Field>
+        <Field label="Price / Piece (SSP)"><input type="number" step="0.01" value={f.price_per_piece} onChange={set('price_per_piece')} placeholder="0" /></Field>
+      </div>
+      <CalcSummary units={f.units} costPerUnit={f.cost_per_unit} piecesPerUnit={f.pieces_per_unit} pricePerPiece={f.price_per_piece} />
+      {isNew
+        ? <p style={{ color: 'var(--muted)', fontSize: 12.5, marginBottom: 0 }}>Stock will start at units × pieces = <strong>{(Number(f.units) || 0) * (Number(f.pieces_per_unit) || 0)}</strong> pieces.</p>
+        : <p style={{ color: 'var(--muted)', fontSize: 12.5, marginBottom: 0 }}>Editing these figures won’t change the <strong>{row.stock}</strong> pieces already in stock — use “+ Stock” to add more.</p>}
     </Modal>
   );
 }
 
 function RestockForm({ product, onClose, onSaved }) {
-  const [f, setF] = useState({ qty: '', cost: product.cost, record_expense: true, date: today() });
+  const [f, setF] = useState({ units: '', cost_per_unit: product.cost_per_unit || '', record_expense: true, date: today() });
   const [err, setErr] = useState('');
+  const piecesAdded = (Number(f.units) || 0) * (product.pieces_per_unit || 1);
+  const totalCost = (Number(f.units) || 0) * (Number(f.cost_per_unit) || 0);
 
   async function save() {
     setErr('');
     try { await api(`/products/${product.id}/restock`, { method: 'POST', body: f }); onSaved(); }
     catch (e) { setErr(e.message); }
   }
-  const totalCost = (Number(f.qty) || 0) * (Number(f.cost) || 0);
 
   return (
     <Modal title={`Add stock · ${product.name}`} onClose={onClose}
       footer={<><button className="btn ghost" onClick={onClose}>Cancel</button><button className="btn" onClick={save}>Add stock</button></>}>
       <ErrorMsg>{err}</ErrorMsg>
-      <p style={{ marginTop: 0, color: 'var(--muted)' }}>Currently {product.stock} in stock.</p>
+      <p style={{ marginTop: 0, color: 'var(--muted)' }}>Currently {product.stock} pieces in stock · {product.pieces_per_unit} pieces per unit.</p>
       <div className="form-row">
-        <Field label="Quantity added"><input type="number" min="1" value={f.qty} onChange={(e) => setF({ ...f, qty: e.target.value })} autoFocus /></Field>
-        <Field label="Unit cost (SSP)"><input type="number" step="0.01" value={f.cost} onChange={(e) => setF({ ...f, cost: e.target.value })} /></Field>
+        <Field label="Units bought"><input type="number" min="1" value={f.units} onChange={(e) => setF({ ...f, units: e.target.value })} autoFocus /></Field>
+        <Field label="Cost / Unit (SSP)"><input type="number" step="0.01" value={f.cost_per_unit} onChange={(e) => setF({ ...f, cost_per_unit: e.target.value })} /></Field>
       </div>
+      <p style={{ color: 'var(--muted)', fontSize: 13 }}>Adds <strong>{piecesAdded}</strong> pieces to stock.</p>
       <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6, cursor: 'pointer' }}>
         <input type="checkbox" style={{ width: 'auto' }} checked={f.record_expense} onChange={(e) => setF({ ...f, record_expense: e.target.checked })} />
         Also record {money(totalCost)} as a “Stock Purchase” expense

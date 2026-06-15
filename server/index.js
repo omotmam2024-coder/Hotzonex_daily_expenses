@@ -126,20 +126,56 @@ api.delete('/income/:id', (req, res) => {
 });
 
 // ---------------------------- products ----------------------------
+// A product is stocked in `units` (cartons/crates) of `pieces_per_unit` sellable
+// pieces, bought at `cost_per_unit`. We also keep per-piece price/cost and a live
+// piece `stock` so the POS, daily sheet and debts all work in pieces.
+function pieceFields(body) {
+  const units = Number(body.units) || 0;
+  const cost_per_unit = Number(body.cost_per_unit) || 0;
+  const pieces_per_unit = Number(body.pieces_per_unit) || 1;
+  // selling price per piece (accept price_per_piece or legacy price)
+  const price = Number(body.price_per_piece ?? body.price) || 0;
+  // cost per piece (derive from carton cost, or accept legacy cost)
+  const cost = body.cost !== undefined && body.units === undefined
+    ? Number(body.cost) || 0
+    : (pieces_per_unit ? cost_per_unit / pieces_per_unit : 0);
+  return { units, cost_per_unit, pieces_per_unit, price, cost };
+}
+
 api.get('/products', (req, res) => {
-  res.json(db.prepare('SELECT * FROM products WHERE active = 1 ORDER BY name').all());
+  const rows = db.prepare('SELECT * FROM products WHERE active = 1 ORDER BY name').all();
+  rows.forEach((p) => {
+    p.total_cost = p.units * p.cost_per_unit;
+    p.exp_sales = p.units * p.pieces_per_unit * p.price; // expected sales if all sold
+    p.profit = p.exp_sales - p.total_cost;
+  });
+  res.json(rows);
 });
 api.post('/products', (req, res) => {
-  const { name, price, cost, stock } = req.body || {};
+  const { name } = req.body || {};
   if (!name) return res.status(400).json({ error: 'Name required' });
-  const info = db.prepare('INSERT INTO products (name, price, cost, stock) VALUES (?, ?, ?, ?)')
-    .run(name, Number(price) || 0, Number(cost) || 0, Number(stock) || 0);
+  const f = pieceFields(req.body || {});
+  // initial stock (pieces) comes from the intake; allow explicit override
+  const stock = req.body.stock !== undefined && req.body.stock !== ''
+    ? Number(req.body.stock) || 0
+    : f.units * f.pieces_per_unit;
+  const info = db.prepare(
+    'INSERT INTO products (name, price, cost, stock, units, cost_per_unit, pieces_per_unit) VALUES (?, ?, ?, ?, ?, ?, ?)'
+  ).run(name, f.price, f.cost, stock, f.units, f.cost_per_unit, f.pieces_per_unit);
   res.json({ id: info.lastInsertRowid });
 });
 api.put('/products/:id', (req, res) => {
-  const { name, price, cost, stock } = req.body || {};
-  db.prepare('UPDATE products SET name=?, price=?, cost=?, stock=? WHERE id=?')
-    .run(name, Number(price) || 0, Number(cost) || 0, Number(stock) || 0, req.params.id);
+  const { name } = req.body || {};
+  const f = pieceFields(req.body || {});
+  // editing the intake numbers doesn't silently wipe pieces already sold:
+  // only set stock if the caller sends one explicitly.
+  if (req.body.stock !== undefined && req.body.stock !== '') {
+    db.prepare('UPDATE products SET name=?, price=?, cost=?, stock=?, units=?, cost_per_unit=?, pieces_per_unit=? WHERE id=?')
+      .run(name, f.price, f.cost, Number(req.body.stock) || 0, f.units, f.cost_per_unit, f.pieces_per_unit, req.params.id);
+  } else {
+    db.prepare('UPDATE products SET name=?, price=?, cost=?, units=?, cost_per_unit=?, pieces_per_unit=? WHERE id=?')
+      .run(name, f.price, f.cost, f.units, f.cost_per_unit, f.pieces_per_unit, req.params.id);
+  }
   res.json({ ok: true });
 });
 api.delete('/products/:id', (req, res) => {
@@ -283,24 +319,26 @@ api.delete('/orders/:id', (req, res) => {
   res.json({ ok: true });
 });
 
-// add stock when inventory is bought; optionally log it as a Stock Purchase expense
+// add stock when more inventory is bought, by units (cartons). Adds
+// units × pieces_per_unit pieces, and can log a Stock Purchase expense.
 api.post('/products/:id/restock', (req, res) => {
-  const { qty, cost, record_expense, date } = req.body || {};
+  const { units, cost_per_unit, record_expense, date } = req.body || {};
   const p = db.prepare('SELECT * FROM products WHERE id = ?').get(req.params.id);
   if (!p) return res.status(404).json({ error: 'Product not found' });
-  const q = Number(qty) || 0;
-  if (q <= 0) return res.status(400).json({ error: 'Quantity required' });
-  db.prepare('UPDATE products SET stock = stock + ? WHERE id = ?').run(q, p.id);
-  const unitCost = cost === undefined || cost === '' ? p.cost : Number(cost);
-  if (cost !== undefined && cost !== '') {
-    db.prepare('UPDATE products SET cost = ? WHERE id = ?').run(unitCost, p.id);
-  }
-  if (record_expense && unitCost > 0) {
+  const u = Number(units) || 0;
+  if (u <= 0) return res.status(400).json({ error: 'Number of units required' });
+  const ppu = p.pieces_per_unit || 1;
+  const piecesAdded = u * ppu;
+  const cpu = cost_per_unit === undefined || cost_per_unit === '' ? p.cost_per_unit : Number(cost_per_unit);
+  // keep the carton cost current and add the pieces to stock
+  db.prepare('UPDATE products SET stock = stock + ?, units = units + ?, cost_per_unit = ?, cost = ? WHERE id = ?')
+    .run(piecesAdded, u, cpu, ppu ? cpu / ppu : 0, p.id);
+  if (record_expense && cpu > 0) {
     const d = date || new Date().toISOString().slice(0, 10);
     db.prepare('INSERT INTO expenses (date, category, description, amount, method, created_by) VALUES (?, ?, ?, ?, ?, ?)')
-      .run(d, 'Stock Purchase', `Restock ${q} × ${p.name}`, q * unitCost, 'cash', req.user.username);
+      .run(d, 'Stock Purchase', `Restock ${u} unit(s) × ${p.name}`, u * cpu, 'cash', req.user.username);
   }
-  res.json({ ok: true });
+  res.json({ ok: true, pieces_added: piecesAdded });
 });
 
 // ---------------------------- customers ---------------------------
