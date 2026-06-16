@@ -7,16 +7,25 @@ import {
 export default function Dashboard({ goto }) {
   const [s, setS] = useState(null);
   const [series, setSeries] = useState([]);
+  const [products, setProducts] = useState([]);
 
   useEffect(() => {
     api('/summary').then(setS).catch(() => {});
     api('/series?days=30').then(setSeries).catch(() => {});
+    api('/products').then(setProducts).catch(() => {});
   }, []);
 
   if (!s) return <div className="empty">Loading…</div>;
 
   const netToday = s.today.income + s.today.sales - s.today.expense;
   const netMonth = s.month.income + s.month.sales - s.month.expense;
+
+  // value tied up in the goods still on the shelf (by remaining pieces)
+  const stock = products.reduce((a, p) => ({
+    cost: a.cost + p.stock * p.cost,
+    retail: a.retail + p.stock * p.price,
+  }), { cost: 0, retail: 0 });
+  const stockProfit = stock.retail - stock.cost;
 
   return (
     <>
@@ -69,6 +78,34 @@ export default function Dashboard({ goto }) {
           </ResponsiveContainer>
         </div>
       </div>
+
+      {products.length > 0 && (
+        <div className="panel">
+          <div className="panel-head">
+            <h3>🍺 Bar stock on hand</h3>
+            <button className="btn ghost sm" onClick={() => goto('shop')}>Manage stock →</button>
+          </div>
+          <div className="panel-body">
+            <div className="cards" style={{ marginBottom: 0 }}>
+              <div className="card">
+                <div className="label">Stock value (at cost)</div>
+                <div className="value">{money(stock.cost)}</div>
+                <div className="sub">what the goods on hand cost you</div>
+              </div>
+              <div className="card">
+                <div className="label">If all sold (retail)</div>
+                <div className="value" style={{ color: 'var(--brand)' }}>{money(stock.retail)}</div>
+                <div className="sub">{products.reduce((a, p) => a + p.stock, 0)} pieces across {products.length} items</div>
+              </div>
+              <div className="card">
+                <div className="label">Potential profit</div>
+                <div className="value green">{money(stockProfit)}</div>
+                <div className="sub">retail minus cost of stock</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {s.low_stock.length > 0 && (
         <div className="panel">
