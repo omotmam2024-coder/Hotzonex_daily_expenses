@@ -10,6 +10,8 @@ const JWT_SECRET = process.env.JWT_SECRET || 'hotzonex-expenses-secret-change-me
 
 // run schema setup once; every request waits on this (cheap & idempotent)
 export const ready = initDb();
+// never let the init promise become an "unhandled rejection" (crashes the lambda)
+ready.catch((e) => console.error('Database initialization failed:', e));
 
 // wrap async handlers so a rejected promise becomes a clean 500 instead of a hang
 const h = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
@@ -17,7 +19,14 @@ const today = () => new Date().toISOString().slice(0, 10);
 
 export const app = express();
 app.use(express.json());
-app.use(h(async (req, res, next) => { await ready; next(); }));
+app.use(async (req, res, next) => {
+  try {
+    await ready;
+    next();
+  } catch (e) {
+    res.status(503).json({ error: 'Database not configured. Set TURSO_DATABASE_URL and TURSO_AUTH_TOKEN.' });
+  }
+});
 
 // ----------------------------- auth -----------------------------
 function auth(req, res, next) {
