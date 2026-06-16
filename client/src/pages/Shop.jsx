@@ -485,60 +485,69 @@ function Products() {
   if (bulk) return <StockIntake onDone={() => { setBulk(false); load(); }} />;
 
   return (
-    <div className="panel">
-      <div className="panel-head">
-        <h3>Products / Stock</h3>
-        <div className="toolbar">
-          <button className="btn ghost" onClick={() => setBulk(true)}>📋 Add many (sheet)</button>
-          <button className="btn" onClick={() => setEditing({ blank: true })}>+ Add Item</button>
+    <>
+      {rows.length > 0 && (
+        <div className="cards" style={{ marginBottom: 16 }}>
+          <div className="card"><div className="label">Items</div><div className="value">{rows.length}</div><div className="sub">{rows.reduce((a, p) => a + p.stock, 0)} pieces in stock</div></div>
+          <div className="card"><div className="label">Stock value (at cost)</div><div className="value">{money(t.cost)}</div></div>
+          <div className="card"><div className="label">Expected sales</div><div className="value" style={{ color: 'var(--brand)' }}>{money(t.sales)}</div></div>
+          <div className="card"><div className="label">Expected profit</div><div className="value green">{money(t.profit)}</div></div>
         </div>
-      </div>
-      <div className="panel-body" style={{ padding: 0, overflowX: 'auto' }}>
-        <table>
-          <thead>
-            <tr>
-              <th>Item</th><th className="num">Units</th><th className="num">Cost / Unit</th>
-              <th className="num">Pieces / Unit</th><th className="num">Price / Piece</th>
-              <th className="num">Total Cost</th><th className="num">Exp. Sales</th>
-              <th className="num">Profit</th><th className="num">In Stock</th><th></th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.length === 0 && <tr><td colSpan={10} className="empty">No items yet — click “+ Add Item”</td></tr>}
-            {rows.map((p) => (
-              <tr key={p.id}>
-                <td>{p.name}</td>
-                <td className="num">{p.units}</td>
-                <td className="num">{money(p.cost_per_unit)}</td>
-                <td className="num">{p.pieces_per_unit}</td>
-                <td className="num">{money(p.price)}</td>
-                <td className="num">{money(p.total_cost)}</td>
-                <td className="num" style={{ color: 'var(--brand)' }}>{money(p.exp_sales)}</td>
-                <td className="num" style={{ color: 'var(--green)', fontWeight: 600 }}>{money(p.profit)}</td>
-                <td className="num">{p.stock <= 5 ? <span className="badge amber">{p.stock}</span> : p.stock}</td>
-                <td className="num" style={{ whiteSpace: 'nowrap' }}>
-                  <button className="btn ghost sm" onClick={() => setRestock(p)}>+ Stock</button>
-                  <button className="icon-btn" onClick={() => setEditing(p)}>✏️</button>
-                  <button className="icon-btn" onClick={() => confirm(`Remove ${p.name}?`, async () => { await api(`/products/${p.id}`, { method: 'DELETE' }); load(); })}>🗑️</button>
-                </td>
+      )}
+
+      <div className="panel">
+        <div className="panel-head">
+          <h3>Products / Stock</h3>
+          <div className="toolbar">
+            <button className="btn ghost" onClick={() => setBulk(true)}>📋 Add many (sheet)</button>
+            <button className="btn" onClick={() => setEditing({ blank: true })}>+ Add Item</button>
+          </div>
+        </div>
+        <div className="panel-body" style={{ padding: 0, overflowX: 'auto' }}>
+          <table className="prod-table">
+            <thead>
+              <tr>
+                <th>Item</th><th className="num">Sell / piece</th><th className="num">In stock</th>
+                <th className="num">Total cost</th><th className="num">Exp. sales</th><th className="num">Profit</th><th></th>
               </tr>
-            ))}
-            {rows.length > 0 && (
-              <tr style={{ background: 'var(--surface-2)', fontWeight: 700 }}>
-                <td colSpan={5}>TOTAL</td>
-                <td className="num">{money(t.cost)}</td>
-                <td className="num" style={{ color: 'var(--brand)' }}>{money(t.sales)}</td>
-                <td className="num" style={{ color: 'var(--green)' }}>{money(t.profit)}</td>
-                <td colSpan={2}></td>
-              </tr>
-            )}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {rows.length === 0 && <tr><td colSpan={7} className="empty">No items yet — click “+ Add Item” or “Add many (sheet)”.</td></tr>}
+              {rows.map((p) => (
+                <tr key={p.id}>
+                  <td>
+                    <div style={{ fontWeight: 600 }}>{p.name}</div>
+                    <div style={{ fontSize: 11.5, color: 'var(--muted)' }}>{p.units} unit × {p.pieces_per_unit} pcs · buy {money(p.cost_per_unit)}/unit</div>
+                  </td>
+                  <td className="num" style={{ fontWeight: 600 }}>{money(p.price)}</td>
+                  <td className="num">{p.stock <= 5 ? <span className="badge amber">{p.stock}</span> : <span className="badge gray">{p.stock}</span>}</td>
+                  <td className="num">{money(p.total_cost)}</td>
+                  <td className="num" style={{ color: 'var(--brand)' }}>{money(p.exp_sales)}</td>
+                  <td className="num" style={{ color: 'var(--green)', fontWeight: 600 }}>{money(p.profit)}</td>
+                  <td className="num" style={{ whiteSpace: 'nowrap' }}>
+                    <button className="btn ghost sm" onClick={() => setRestock(p)}>+ Stock</button>
+                    <button className="icon-btn" title="Edit" onClick={() => setEditing(p)}>✏️</button>
+                    <button className="icon-btn" title="Remove" onClick={() => confirm(`Remove ${p.name}?`, async () => { await api(`/products/${p.id}`, { method: 'DELETE' }); load(); })}>🗑️</button>
+                  </td>
+                </tr>
+              ))}
+              {rows.length > 0 && (
+                <tr style={{ background: 'var(--surface-2)', fontWeight: 700 }}>
+                  <td colSpan={3}>TOTAL</td>
+                  <td className="num">{money(t.cost)}</td>
+                  <td className="num" style={{ color: 'var(--brand)' }}>{money(t.sales)}</td>
+                  <td className="num" style={{ color: 'var(--green)' }}>{money(t.profit)}</td>
+                  <td></td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
       </div>
       {editing && <ProductForm row={editing} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); load(); }} />}
       {restock && <RestockForm product={restock} onClose={() => setRestock(null)} onSaved={() => { setRestock(null); load(); }} />}
       {confirmNode}
-    </div>
+    </>
   );
 }
 

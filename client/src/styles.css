@@ -141,6 +141,10 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--brand); out
 .menu-btn { display: none; background: none; border: none; font-size: 22px; cursor: pointer; color: var(--text); }
 @media (max-width: 720px) { .menu-btn { display: block; } }
 
+/* ---------- products table ---------- */
+.prod-table td { padding-top: 12px; padding-bottom: 12px; vertical-align: middle; }
+.prod-table th:first-child, .prod-table td:first-child { min-width: 200px; }
+
 /* ---------- POS / bar tab ---------- */
 .bar-sheet th, .bar-sheet td { vertical-align: middle; }
 .bar-sheet .selected-row { background: #eff6ff; }
