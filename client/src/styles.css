@@ -121,6 +121,7 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--brand); out
 [data-theme='dark'] .badge.gray { background: #2a3340; color: #cbd5e1; }
 
 .error { background: #fee2e2; color: #b91c1c; padding: 10px 12px; border-radius: 8px; margin-bottom: 12px; font-size: 13px; }
+.success-msg { background: #dcfce7; color: #15803d; padding: 10px 12px; border-radius: 8px; margin-bottom: 12px; font-size: 13px; }
 .toolbar { display: flex; gap: 10px; flex-wrap: wrap; align-items: end; }
 
 /* ---------- modal ---------- */
@@ -141,6 +142,45 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--brand); out
 @media (max-width: 720px) { .menu-btn { display: block; } }
 
 /* ---------- POS / bar tab ---------- */
+.bar-sheet th, .bar-sheet td { vertical-align: middle; }
+.bar-sheet .selected-row { background: #eff6ff; }
+[data-theme='dark'] .bar-sheet .selected-row { background: #10213a; }
+.sheet-price, .sheet-qty {
+  width: 110px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.sheet-qty { font-weight: 700; }
+.sheet-total-row {
+  background: var(--surface-2);
+  font-weight: 800;
+  font-size: 15px;
+}
+.sheet-total-row td {
+  padding-top: 14px;
+  padding-bottom: 14px;
+}
+.bar-checkout {
+  display: flex;
+  gap: 16px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 18px;
+  border-top: 1px solid var(--border);
+  background: var(--surface-2);
+  flex-wrap: wrap;
+}
+.inline-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  color: var(--text);
+  cursor: pointer;
+}
+.inline-check input { width: auto; }
+.checkout-actions { display: flex; gap: 10px; align-items: center; margin-left: auto; }
+
 .pos { display: grid; grid-template-columns: 1fr 380px; gap: 16px; align-items: start; }
 .pos-cart { position: sticky; top: 16px; }
 .prod-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 10px; }

@@ -45,7 +45,7 @@ export default function Dashboard({ goto }) {
           <div className={'value ' + (netMonth >= 0 ? 'green' : 'red')}>{money(netMonth)}</div>
           <div className="sub">In {money(s.month.income + s.month.sales)} · Out {money(s.month.expense)}</div>
         </div>
-        <div className="card" style={{ cursor: 'pointer' }} onClick={() => goto('debts')}>
+        <div className="card" style={{ cursor: 'pointer' }} onClick={() => goto('people', 'debts')}>
           <div className="label">Outstanding Debt</div>
           <div className="value amber">{money(s.debt.outstanding)}</div>
           <div className="sub">{s.debt.customers_owing} customer(s) owing →</div>

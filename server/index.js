@@ -206,6 +206,7 @@ api.post('/sales', (req, res) => {
     name = p.name;
     if (!price && price !== 0) price = p.price;
     if (Number.isNaN(price)) price = p.price;
+    if (p.stock < q) return res.status(400).json({ error: `${p.name} has only ${p.stock} in stock` });
   }
   if (!name) return res.status(400).json({ error: 'Product required' });
   if (Number.isNaN(price)) price = 0;
@@ -251,19 +252,23 @@ api.post('/orders', (req, res) => {
 
   const d = date || new Date().toISOString().slice(0, 10);
   const lines = [];
+  const stockNeeded = new Map();
   let total = 0;
   for (const it of items) {
     let name = it.product_name;
     let price = Number(it.unit_price);
+    const qty = Number(it.qty) || 1;
     if (it.product_id) {
       const p = db.prepare('SELECT * FROM products WHERE id = ?').get(it.product_id);
       if (!p) return res.status(400).json({ error: 'Product not found' });
       name = p.name;
       if (Number.isNaN(price)) price = p.price;
+      const nextNeeded = (stockNeeded.get(p.id) || 0) + qty;
+      if (nextNeeded > p.stock) return res.status(400).json({ error: `${p.name} has only ${p.stock} in stock` });
+      stockNeeded.set(p.id, nextNeeded);
     }
     if (!name) return res.status(400).json({ error: 'Each item needs a name' });
     if (Number.isNaN(price)) price = 0;
-    const qty = Number(it.qty) || 1;
     const line = qty * price;
     total += line;
     lines.push({ product_id: it.product_id || null, name, qty, price, line });

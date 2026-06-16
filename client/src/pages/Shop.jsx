@@ -3,22 +3,209 @@ import { api, money, today, toCSV, downloadCSV } from '../api.js';
 import { Modal, Field, ErrorMsg, useConfirm } from '../ui.jsx';
 
 export default function Shop() {
-  const [tab, setTab] = useState('pos');
+  const [tab, setTab] = useState('daily');
   return (
     <>
       <div style={{ display: 'flex', gap: 8, marginBottom: 16, flexWrap: 'wrap' }}>
+        <button className={'btn ' + (tab === 'daily' ? '' : 'ghost')} onClick={() => setTab('daily')}>Daily Bar Entry</button>
         <button className={'btn ' + (tab === 'pos' ? '' : 'ghost')} onClick={() => setTab('pos')}>🧾 New Sale</button>
         <button className={'btn ' + (tab === 'tabs' ? '' : 'ghost')} onClick={() => setTab('tabs')}>💳 Open Tabs</button>
         <button className={'btn ' + (tab === 'orders' ? '' : 'ghost')} onClick={() => setTab('orders')}>Sales History</button>
         <button className={'btn ' + (tab === 'products' ? '' : 'ghost')} onClick={() => setTab('products')}>Products / Stock</button>
         <button className={'btn ' + (tab === 'intake' ? '' : 'ghost')} onClick={() => setTab('intake')}>📋 Stock Entry</button>
       </div>
+      {tab === 'daily' && <DailyBarEntry />}
       {tab === 'pos' && <POS />}
       {tab === 'tabs' && <Tabs />}
       {tab === 'orders' && <Orders />}
       {tab === 'products' && <Products />}
       {tab === 'intake' && <StockIntake />}
     </>
+  );
+}
+
+/* -------------------------- Daily bar entry sheet ------------------------- */
+function DailyBarEntry() {
+  const [products, setProducts] = useState([]);
+  const [customers, setCustomers] = useState([]);
+  const [date, setDate] = useState(today());
+  const [qtyById, setQtyById] = useState({});
+  const [priceById, setPriceById] = useState({});
+  const [credit, setCredit] = useState(false);
+  const [customerId, setCustomerId] = useState('');
+  const [dueDate, setDueDate] = useState('');
+  const [search, setSearch] = useState('');
+  const [err, setErr] = useState('');
+  const [saved, setSaved] = useState(null);
+
+  function load() {
+    api('/products').then((rows) => {
+      setProducts(rows);
+      setPriceById((old) => {
+        const next = { ...old };
+        rows.forEach((p) => {
+          if (next[p.id] === undefined) next[p.id] = p.price;
+        });
+        return next;
+      });
+    }).catch(() => {});
+    api('/customers').then(setCustomers).catch(() => {});
+  }
+  useEffect(() => { load(); }, []);
+
+  const visible = products.filter((p) => p.name.toLowerCase().includes(search.toLowerCase()));
+  const lines = products
+    .map((p) => {
+      const qty = Number(qtyById[p.id]) || 0;
+      const price = Number(priceById[p.id] ?? p.price) || 0;
+      return { product_id: p.id, product_name: p.name, qty, unit_price: price, stock: p.stock, total: qty * price };
+    })
+    .filter((l) => l.qty > 0);
+  const total = lines.reduce((a, l) => a + l.total, 0);
+  const totalQty = lines.reduce((a, l) => a + l.qty, 0);
+
+  function setQty(id, raw, stock) {
+    const n = Math.max(0, Number(raw) || 0);
+    setQtyById((m) => ({ ...m, [id]: Math.min(n, stock) }));
+  }
+  function clearSheet() {
+    setQtyById({});
+    setCredit(false);
+    setCustomerId('');
+    setDueDate('');
+    setErr('');
+    setSaved(null);
+  }
+  async function save() {
+    setErr('');
+    setSaved(null);
+    if (lines.length === 0) { setErr('Enter quantity bought for at least one item'); return; }
+    const over = lines.find((l) => l.qty > l.stock);
+    if (over) { setErr(`${over.product_name} has only ${over.stock} in stock`); return; }
+    if (credit && !customerId) { setErr('Choose the customer before saving a credit sale'); return; }
+    try {
+      const res = await api('/orders', {
+        method: 'POST',
+        body: {
+          date,
+          is_credit: credit,
+          customer_id: customerId || null,
+          due_date: dueDate || null,
+          note: 'Daily bar entry',
+          items: lines,
+        },
+      });
+      setSaved({ id: res.id, total: res.total, count: lines.length });
+      setQtyById({});
+      setCredit(false);
+      setCustomerId('');
+      setDueDate('');
+      load();
+    } catch (e) {
+      setErr(e.message);
+    }
+  }
+
+  return (
+    <div className="panel">
+      <div className="panel-head">
+        <div>
+          <h3>Daily Bar Entry</h3>
+          <div style={{ color: 'var(--muted)', fontSize: 12.5, marginTop: 4 }}>
+            This sheet is built from Products / Stock. Add or change goods there and they appear here automatically.
+          </div>
+        </div>
+        <div className="toolbar">
+          <div><label>Date</label><input type="date" value={date} onChange={(e) => setDate(e.target.value)} /></div>
+          <div><label>Find item</label><input placeholder="Search goods" value={search} onChange={(e) => setSearch(e.target.value)} /></div>
+        </div>
+      </div>
+      <div className="panel-body" style={{ padding: 0, overflowX: 'auto' }}>
+        {err && <div className="error" style={{ margin: 12 }}>{err}</div>}
+        {saved && <div className="success-msg" style={{ margin: 12 }}>Saved bill #{saved.id}: {saved.count} item(s), total {money(saved.total)}.</div>}
+        <table className="bar-sheet">
+          <thead>
+            <tr>
+              <th>Goods</th>
+              <th className="num">Available</th>
+              <th className="num">Price</th>
+              <th className="num">Qty bought</th>
+              <th className="num">Total</th>
+            </tr>
+          </thead>
+          <tbody>
+            {products.length === 0 && <tr><td colSpan={5} className="empty">No goods yet. Add drinks/items under Products / Stock or Stock Entry.</td></tr>}
+            {visible.map((p) => {
+              const qty = Number(qtyById[p.id]) || 0;
+              const price = Number(priceById[p.id] ?? p.price) || 0;
+              const lineTotal = qty * price;
+              return (
+                <tr key={p.id} className={qty > 0 ? 'selected-row' : ''}>
+                  <td>
+                    <strong>{p.name}</strong>
+                    <div style={{ color: 'var(--muted)', fontSize: 12 }}>{p.pieces_per_unit || 1} piece(s) per unit</div>
+                  </td>
+                  <td className="num">{p.stock <= 5 ? <span className="badge amber">{p.stock}</span> : p.stock}</td>
+                  <td className="num">
+                    <input
+                      type="number"
+                      step="0.01"
+                      value={priceById[p.id] ?? p.price}
+                      onChange={(e) => setPriceById((m) => ({ ...m, [p.id]: e.target.value }))}
+                      className="sheet-price"
+                    />
+                  </td>
+                  <td className="num">
+                    <input
+                      type="number"
+                      min="0"
+                      max={p.stock}
+                      value={qtyById[p.id] ?? ''}
+                      onChange={(e) => setQty(p.id, e.target.value, p.stock)}
+                      placeholder="0"
+                      className="sheet-qty"
+                    />
+                  </td>
+                  <td className="num" style={{ fontWeight: 700 }}>{lineTotal ? money(lineTotal) : '-'}</td>
+                </tr>
+              );
+            })}
+            {products.length > 0 && (
+              <tr className="sheet-total-row">
+                <td>Total bill</td>
+                <td className="num">{totalQty} item(s)</td>
+                <td></td>
+                <td></td>
+                <td className="num">{money(total)}</td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+      <div className="bar-checkout">
+        <label className="inline-check">
+          <input type="checkbox" checked={credit} onChange={(e) => setCredit(e.target.checked)} />
+          Put this bill on customer debt
+        </label>
+        {credit && (
+          <div className="form-row" style={{ flex: 1, marginBottom: 0 }}>
+            <Field label="Customer">
+              <select value={customerId} onChange={(e) => setCustomerId(e.target.value)}>
+                <option value="">Select customer</option>
+                {customers.map((c) => <option key={c.id} value={c.id}>{c.name}{c.phone ? ` - ${c.phone}` : ''}</option>)}
+              </select>
+            </Field>
+            <Field label="Due date"><input type="date" value={dueDate} onChange={(e) => setDueDate(e.target.value)} /></Field>
+          </div>
+        )}
+        <div className="checkout-actions">
+          <button className="btn ghost" onClick={clearSheet}>Clear</button>
+          <button className="btn success" onClick={save} disabled={lines.length === 0}>
+            Save bill - {money(total)}
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }
 
