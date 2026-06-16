@@ -163,9 +163,9 @@ function DebtForm({ customers, onClose, onSaved }) {
       </div>
 
       <label style={{ marginBottom: 6 }}>Items taken</label>
-      <div style={{ overflowX: 'auto', border: '1px solid var(--border)', borderRadius: 8 }}>
-        <table style={{ minWidth: 460 }}>
-          <thead><tr><th style={{ minWidth: 180 }}>Item</th><th className="num">Qty</th><th className="num">Price</th><th className="num">Amount</th><th></th></tr></thead>
+      <div style={{ border: '1px solid var(--border)', borderRadius: 8 }}>
+        <table>
+          <thead><tr><th>Item</th><th className="num">Qty</th><th className="num">Price</th><th className="num">Amount</th><th></th></tr></thead>
           <tbody>
             {computed.map((r) => (
               <tr key={r.key}>

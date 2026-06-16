@@ -3,7 +3,7 @@ import React, { useState } from 'react';
 export function Modal({ title, onClose, children, footer, wide }) {
   return (
     <div className="modal-bg" onMouseDown={onClose}>
-      <div className="modal" style={wide ? { width: 640 } : undefined} onMouseDown={(e) => e.stopPropagation()}>
+      <div className="modal" style={{ width: wide ? 640 : 460, maxWidth: 'calc(100vw - 32px)' }} onMouseDown={(e) => e.stopPropagation()}>
         <div className="modal-head">
           <h3>{title}</h3>
           <button className="icon-btn" onClick={onClose}>✕</button>

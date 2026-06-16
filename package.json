@@ -7,7 +7,8 @@
     "dev:server": "node --disable-warning=ExperimentalWarning server/index.js",
     "dev:client": "npm --prefix client run dev",
     "build": "npm --prefix client install && npm --prefix client run build",
-    "start": "node --disable-warning=ExperimentalWarning server/index.js"
+    "start": "node --disable-warning=ExperimentalWarning server/index.js",
+    "desktop": "node desktop.mjs"
   },
   "dependencies": {
     "express": "^4.19.2",

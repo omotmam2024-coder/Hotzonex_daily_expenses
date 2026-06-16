@@ -46,6 +46,20 @@ npm run dev:server     # API on :4100
 npm run dev:client     # Vite UI on :5174 (proxies /api to :4100)
 ```
 
+## Run as a desktop app (Windows)
+
+No terminal needed. After building once (`npm run build`):
+
+1. **Put an icon on your Desktop (one time):** right-click `Create-Desktop-Shortcut.ps1`
+   → **Run with PowerShell**. A **Hotzonex** icon appears on your Desktop.
+2. **Double-click the Hotzonex icon** any time to open the app in its own window
+   (no browser tabs or address bar). The server starts automatically in the
+   background.
+
+You can also just double-click **`Hotzonex.vbs`** directly, or run `npm run desktop`.
+
+To shut the background server down, double-click **`Stop-Hotzonex.bat`**.
+
 ## Data
 
 All data lives in a single SQLite file `data.db` in the project root (created on
