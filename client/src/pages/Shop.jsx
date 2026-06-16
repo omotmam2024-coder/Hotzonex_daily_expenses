@@ -12,175 +12,132 @@ export default function Shop() {
         <button className={'btn ' + (tab === 'tabs' ? '' : 'ghost')} onClick={() => setTab('tabs')}>💳 Open Tabs</button>
         <button className={'btn ' + (tab === 'orders' ? '' : 'ghost')} onClick={() => setTab('orders')}>Sales History</button>
         <button className={'btn ' + (tab === 'products' ? '' : 'ghost')} onClick={() => setTab('products')}>Products / Stock</button>
-        <button className={'btn ' + (tab === 'intake' ? '' : 'ghost')} onClick={() => setTab('intake')}>📋 Stock Entry</button>
       </div>
       {tab === 'daily' && <DailyBarEntry />}
       {tab === 'pos' && <POS />}
       {tab === 'tabs' && <Tabs />}
       {tab === 'orders' && <Orders />}
       {tab === 'products' && <Products />}
-      {tab === 'intake' && <StockIntake />}
     </>
   );
 }
 
 /* -------------------------- Daily bar entry sheet ------------------------- */
+const rand = () => Math.random().toString(36).slice(2);
+const emptyEntryRow = () => ({ key: rand(), product_id: '', name: '', qty: '', unit_price: '' });
+
 function DailyBarEntry() {
   const [products, setProducts] = useState([]);
   const [customers, setCustomers] = useState([]);
+  const [rows, setRows] = useState([emptyEntryRow()]);
   const [date, setDate] = useState(today());
-  const [qtyById, setQtyById] = useState({});
-  const [priceById, setPriceById] = useState({});
   const [credit, setCredit] = useState(false);
   const [customerId, setCustomerId] = useState('');
   const [dueDate, setDueDate] = useState('');
-  const [search, setSearch] = useState('');
   const [err, setErr] = useState('');
   const [saved, setSaved] = useState(null);
 
   function load() {
-    api('/products').then((rows) => {
-      setProducts(rows);
-      setPriceById((old) => {
-        const next = { ...old };
-        rows.forEach((p) => {
-          if (next[p.id] === undefined) next[p.id] = p.price;
-        });
-        return next;
-      });
-    }).catch(() => {});
+    api('/products').then(setProducts).catch(() => {});
     api('/customers').then(setCustomers).catch(() => {});
   }
   useEffect(() => { load(); }, []);
 
-  const visible = products.filter((p) => p.name.toLowerCase().includes(search.toLowerCase()));
-  const lines = products
-    .map((p) => {
-      const qty = Number(qtyById[p.id]) || 0;
-      const price = Number(priceById[p.id] ?? p.price) || 0;
-      return { product_id: p.id, product_name: p.name, qty, unit_price: price, stock: p.stock, total: qty * price };
-    })
-    .filter((l) => l.qty > 0);
-  const total = lines.reduce((a, l) => a + l.total, 0);
-  const totalQty = lines.reduce((a, l) => a + l.qty, 0);
-
-  function setQty(id, raw, stock) {
-    const n = Math.max(0, Number(raw) || 0);
-    setQtyById((m) => ({ ...m, [id]: Math.min(n, stock) }));
+  // choose a good for a row — auto-fills its name & price (price stays editable)
+  function pick(key, val) {
+    setRows((rs) => rs.map((r) => {
+      if (r.key !== key) return r;
+      if (val === '') return { ...r, product_id: '', name: '', unit_price: '' };
+      if (val === '__custom__') return { ...r, product_id: '__custom__', name: '', unit_price: '' };
+      const p = products.find((x) => String(x.id) === String(val));
+      return { ...r, product_id: Number(val), name: p ? p.name : '', unit_price: p ? p.price : r.unit_price };
+    }));
   }
+  const setRow = (key, k, v) => setRows((rs) => rs.map((r) => (r.key === key ? { ...r, [k]: v } : r)));
+  const addRow = () => setRows((rs) => [...rs, emptyEntryRow()]);
+  const removeRow = (key) => setRows((rs) => (rs.length > 1 ? rs.filter((r) => r.key !== key) : [emptyEntryRow()]));
+  const stockOf = (id) => products.find((p) => p.id === id)?.stock;
+
+  const computed = rows.map((r) => ({ ...r, amount: (Number(r.qty) || 0) * (Number(r.unit_price) || 0) }));
+  const total = computed.reduce((a, r) => a + r.amount, 0);
+  const validRows = () => rows.filter((r) => Number(r.qty) > 0 && (typeof r.product_id === 'number' || r.name.trim()));
+
   function clearSheet() {
-    setQtyById({});
-    setCredit(false);
-    setCustomerId('');
-    setDueDate('');
-    setErr('');
-    setSaved(null);
+    setRows([emptyEntryRow()]); setCredit(false); setCustomerId(''); setDueDate(''); setErr(''); setSaved(null);
   }
   async function save() {
-    setErr('');
-    setSaved(null);
-    if (lines.length === 0) { setErr('Enter quantity bought for at least one item'); return; }
-    const over = lines.find((l) => l.qty > l.stock);
-    if (over) { setErr(`${over.product_name} has only ${over.stock} in stock`); return; }
+    setErr(''); setSaved(null);
+    const vr = validRows();
+    if (vr.length === 0) { setErr('Choose an item and enter a quantity'); return; }
     if (credit && !customerId) { setErr('Choose the customer before saving a credit sale'); return; }
+    const items = vr.map((r) => (typeof r.product_id === 'number'
+      ? { product_id: r.product_id, qty: Number(r.qty), unit_price: Number(r.unit_price) }
+      : { product_name: r.name.trim(), qty: Number(r.qty), unit_price: Number(r.unit_price) }));
     try {
       const res = await api('/orders', {
         method: 'POST',
-        body: {
-          date,
-          is_credit: credit,
-          customer_id: customerId || null,
-          due_date: dueDate || null,
-          note: 'Daily bar entry',
-          items: lines,
-        },
+        body: { date, is_credit: credit, customer_id: customerId || null, due_date: dueDate || null, note: 'Daily bar entry', items },
       });
-      setSaved({ id: res.id, total: res.total, count: lines.length });
-      setQtyById({});
-      setCredit(false);
-      setCustomerId('');
-      setDueDate('');
+      setSaved({ id: res.id, total: res.total, count: vr.length });
+      setRows([emptyEntryRow()]); setCredit(false); setCustomerId(''); setDueDate('');
       load();
-    } catch (e) {
-      setErr(e.message);
-    }
+    } catch (e) { setErr(e.message); }
   }
 
   return (
     <div className="panel">
       <div className="panel-head">
         <div>
-          <h3>Daily Bar Entry</h3>
+          <h3>Daily Bar Entry · <span style={{ color: 'var(--green)' }}>{money(total)}</span></h3>
           <div style={{ color: 'var(--muted)', fontSize: 12.5, marginTop: 4 }}>
-            This sheet is built from Products / Stock. Add or change goods there and they appear here automatically.
+            Add the goods sold today row by row. Prices come from Products but can be changed here.
           </div>
         </div>
         <div className="toolbar">
           <div><label>Date</label><input type="date" value={date} onChange={(e) => setDate(e.target.value)} /></div>
-          <div><label>Find item</label><input placeholder="Search goods" value={search} onChange={(e) => setSearch(e.target.value)} /></div>
         </div>
       </div>
       <div className="panel-body" style={{ padding: 0, overflowX: 'auto' }}>
         {err && <div className="error" style={{ margin: 12 }}>{err}</div>}
         {saved && <div className="success-msg" style={{ margin: 12 }}>Saved bill #{saved.id}: {saved.count} item(s), total {money(saved.total)}.</div>}
-        <table className="bar-sheet">
+        <table className="bar-sheet" style={{ minWidth: 720 }}>
           <thead>
-            <tr>
-              <th>Goods</th>
-              <th className="num">Available</th>
-              <th className="num">Price</th>
-              <th className="num">Qty bought</th>
-              <th className="num">Total</th>
-            </tr>
+            <tr><th style={{ minWidth: 230 }}>Goods</th><th className="num">Qty sold</th><th className="num">Price</th><th className="num">Total</th><th></th></tr>
           </thead>
           <tbody>
-            {products.length === 0 && <tr><td colSpan={5} className="empty">No goods yet. Add drinks/items under Products / Stock or Stock Entry.</td></tr>}
-            {visible.map((p) => {
-              const qty = Number(qtyById[p.id]) || 0;
-              const price = Number(priceById[p.id] ?? p.price) || 0;
-              const lineTotal = qty * price;
+            {computed.map((r) => {
+              const stock = typeof r.product_id === 'number' ? stockOf(r.product_id) : undefined;
+              const over = stock !== undefined && Number(r.qty) > stock;
               return (
-                <tr key={p.id} className={qty > 0 ? 'selected-row' : ''}>
-                  <td>
-                    <strong>{p.name}</strong>
-                    <div style={{ color: 'var(--muted)', fontSize: 12 }}>{p.pieces_per_unit || 1} piece(s) per unit</div>
+                <tr key={r.key} className={r.amount > 0 ? 'selected-row' : ''}>
+                  <td style={{ padding: '6px' }}>
+                    <select value={r.product_id === '' ? '' : r.product_id} onChange={(e) => pick(r.key, e.target.value)}>
+                      <option value="">— choose item —</option>
+                      {products.map((p) => <option key={p.id} value={p.id}>{p.name} ({p.stock} in stock)</option>)}
+                      <option value="__custom__">+ custom item…</option>
+                    </select>
+                    {r.product_id === '__custom__' && (
+                      <input value={r.name} onChange={(e) => setRow(r.key, 'name', e.target.value)} placeholder="Custom item name" style={{ marginTop: 6 }} />
+                    )}
+                    {over && <div style={{ color: 'var(--amber)', fontSize: 11, marginTop: 3 }}>Only {stock} in stock</div>}
                   </td>
-                  <td className="num">{p.stock <= 5 ? <span className="badge amber">{p.stock}</span> : p.stock}</td>
-                  <td className="num">
-                    <input
-                      type="number"
-                      step="0.01"
-                      value={priceById[p.id] ?? p.price}
-                      onChange={(e) => setPriceById((m) => ({ ...m, [p.id]: e.target.value }))}
-                      className="sheet-price"
-                    />
-                  </td>
-                  <td className="num">
-                    <input
-                      type="number"
-                      min="0"
-                      max={p.stock}
-                      value={qtyById[p.id] ?? ''}
-                      onChange={(e) => setQty(p.id, e.target.value, p.stock)}
-                      placeholder="0"
-                      className="sheet-qty"
-                    />
-                  </td>
-                  <td className="num" style={{ fontWeight: 700 }}>{lineTotal ? money(lineTotal) : '-'}</td>
+                  <td style={{ padding: '6px' }}><input type="number" min="0" value={r.qty} onChange={(e) => setRow(r.key, 'qty', e.target.value)} placeholder="0" className="sheet-qty" /></td>
+                  <td style={{ padding: '6px' }}><input type="number" step="0.01" value={r.unit_price} onChange={(e) => setRow(r.key, 'unit_price', e.target.value)} placeholder="0" className="sheet-price" /></td>
+                  <td className="num" style={{ fontWeight: 700 }}>{r.amount ? money(r.amount) : '-'}</td>
+                  <td className="num"><button className="icon-btn" onClick={() => removeRow(r.key)}>✕</button></td>
                 </tr>
               );
             })}
-            {products.length > 0 && (
-              <tr className="sheet-total-row">
-                <td>Total bill</td>
-                <td className="num">{totalQty} item(s)</td>
-                <td></td>
-                <td></td>
-                <td className="num">{money(total)}</td>
-              </tr>
-            )}
+            <tr className="sheet-total-row">
+              <td>Total bill</td>
+              <td className="num">{validRows().length} item(s)</td>
+              <td></td>
+              <td className="num">{money(total)}</td>
+              <td></td>
+            </tr>
           </tbody>
         </table>
+        <div style={{ padding: '12px 14px' }}><button className="btn ghost" onClick={addRow}>+ Add item row</button></div>
       </div>
       <div className="bar-checkout">
         <label className="inline-check">
@@ -200,7 +157,7 @@ function DailyBarEntry() {
         )}
         <div className="checkout-actions">
           <button className="btn ghost" onClick={clearSheet}>Clear</button>
-          <button className="btn success" onClick={save} disabled={lines.length === 0}>
+          <button className="btn success" onClick={save} disabled={total <= 0}>
             Save bill - {money(total)}
           </button>
         </div>
@@ -515,6 +472,7 @@ function Products() {
   const [rows, setRows] = useState([]);
   const [editing, setEditing] = useState(null);
   const [restock, setRestock] = useState(null);
+  const [bulk, setBulk] = useState(false);
   const [confirmNode, confirm] = useConfirm();
 
   function load() { api('/products').then(setRows).catch(() => {}); }
@@ -524,11 +482,16 @@ function Products() {
     cost: a.cost + p.total_cost, sales: a.sales + p.exp_sales, profit: a.profit + p.profit,
   }), { cost: 0, sales: 0, profit: 0 });
 
+  if (bulk) return <StockIntake onDone={() => { setBulk(false); load(); }} />;
+
   return (
     <div className="panel">
       <div className="panel-head">
         <h3>Products / Stock</h3>
-        <button className="btn" onClick={() => setEditing({ blank: true })}>+ Add Item</button>
+        <div className="toolbar">
+          <button className="btn ghost" onClick={() => setBulk(true)}>📋 Add many (sheet)</button>
+          <button className="btn" onClick={() => setEditing({ blank: true })}>+ Add Item</button>
+        </div>
       </div>
       <div className="panel-body" style={{ padding: 0, overflowX: 'auto' }}>
         <table>
@@ -580,7 +543,7 @@ function Products() {
 }
 
 /* --------------------- Stock Entry (spreadsheet form) -------------------- */
-function StockIntake() {
+function StockIntake({ onDone }) {
   const blank = () => ({ key: Math.random().toString(36).slice(2), name: '', units: '', cost_per_unit: '', pieces_per_unit: '', price_per_piece: '' });
   const [rows, setRows] = useState([blank(), blank(), blank()]);
   const [err, setErr] = useState('');
@@ -616,6 +579,7 @@ function StockIntake() {
       <div className="panel-head">
         <h3>📋 Stock Entry — add items in rows</h3>
         <div className="toolbar">
+          {onDone && <button className="btn ghost" onClick={onDone}>← Back to list</button>}
           <button className="btn ghost" onClick={addRow}>+ Add row</button>
           <button className="btn success" onClick={saveAll}>Save all items</button>
         </div>
