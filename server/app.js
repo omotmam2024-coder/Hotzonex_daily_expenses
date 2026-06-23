@@ -16,6 +16,11 @@ ready.catch((e) => console.error('Database initialization failed:', e));
 // wrap async handlers so a rejected promise becomes a clean 500 instead of a hang
 const h = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
 const today = () => new Date().toISOString().slice(0, 10);
+// add n days to a YYYY-MM-DD string, returning a YYYY-MM-DD string
+const addDays = (date, n) =>
+  new Date(new Date((date || today()) + 'T00:00:00Z').getTime() + n * 86400000).toISOString().slice(0, 10);
+// the later of two YYYY-MM-DD strings (string compare works for ISO dates)
+const maxDate = (a, b) => (a > b ? a : b);
 
 export const app = express();
 app.use(express.json());
@@ -487,6 +492,316 @@ api.get('/cashup', h(async (req, res) => {
     other_income_cash, other_income_total, tab_payments,
     cash_expenses, total_expenses, cash_in, cash_out: cash_expenses, drawer: cash_in - cash_expenses,
   });
+}));
+
+// ======================= ISP / internet billing =======================
+
+// ----- service plans -----
+api.get('/isp/plans', h(async (req, res) => {
+  res.json(await db.all('SELECT * FROM isp_plans WHERE active = 1 ORDER BY price'));
+}));
+api.post('/isp/plans', h(async (req, res) => {
+  const { name, speed_mbps, price, validity_days, kind } = req.body || {};
+  if (!name) return res.status(400).json({ error: 'Name required' });
+  const info = await db.run(
+    'INSERT INTO isp_plans (name, speed_mbps, price, validity_days, kind) VALUES (?, ?, ?, ?, ?)',
+    name, Number(speed_mbps) || 0, Number(price) || 0, Number(validity_days) || 30, kind === 'hotspot' ? 'hotspot' : 'pppoe');
+  res.json({ id: info.lastInsertRowid });
+}));
+api.put('/isp/plans/:id', h(async (req, res) => {
+  const { name, speed_mbps, price, validity_days, kind } = req.body || {};
+  await db.run('UPDATE isp_plans SET name=?, speed_mbps=?, price=?, validity_days=?, kind=? WHERE id=?',
+    name, Number(speed_mbps) || 0, Number(price) || 0, Number(validity_days) || 30, kind === 'hotspot' ? 'hotspot' : 'pppoe', req.params.id);
+  res.json({ ok: true });
+}));
+api.delete('/isp/plans/:id', h(async (req, res) => {
+  const inUse = (await db.get('SELECT COUNT(*) n FROM isp_subscribers WHERE plan_id = ?', req.params.id)).n;
+  if (inUse > 0) return res.status(400).json({ error: 'Plan is still assigned to subscribers' });
+  await db.run('UPDATE isp_plans SET active = 0 WHERE id = ?', req.params.id);
+  res.json({ ok: true });
+}));
+
+// ----- routers (registry only; future MikroTik hook) -----
+api.get('/isp/routers', h(async (req, res) => {
+  res.json(await db.all('SELECT * FROM isp_routers WHERE active = 1 ORDER BY name'));
+}));
+api.post('/isp/routers', h(async (req, res) => {
+  const { name, location, host, note } = req.body || {};
+  if (!name) return res.status(400).json({ error: 'Name required' });
+  const info = await db.run('INSERT INTO isp_routers (name, location, host, note) VALUES (?, ?, ?, ?)',
+    name, location || '', host || '', note || '');
+  res.json({ id: info.lastInsertRowid });
+}));
+api.put('/isp/routers/:id', h(async (req, res) => {
+  const { name, location, host, note } = req.body || {};
+  await db.run('UPDATE isp_routers SET name=?, location=?, host=?, note=? WHERE id=?',
+    name, location || '', host || '', note || '', req.params.id);
+  res.json({ ok: true });
+}));
+api.delete('/isp/routers/:id', h(async (req, res) => {
+  await db.run('UPDATE isp_routers SET active = 0 WHERE id = ?', req.params.id);
+  res.json({ ok: true });
+}));
+
+// derive a live status from the stored status + expiry date
+const subStatus = (s) => {
+  if (s.status === 'suspended') return 'suspended';
+  if (s.expiry_date && s.expiry_date < today()) return 'expired';
+  return 'active';
+};
+
+// ----- subscribers -----
+api.get('/isp/subscribers', h(async (req, res) => {
+  const { status, q } = req.query;
+  let rows = await db.all(`
+    SELECT s.*, p.name AS plan_name, p.price AS plan_price, p.speed_mbps, r.name AS router_name,
+      COALESCE((SELECT SUM(i.amount) FROM isp_invoices i WHERE i.subscriber_id = s.id AND i.status != 'paid'), 0)
+        - COALESCE((SELECT SUM(pm.amount) FROM isp_payments pm JOIN isp_invoices i2 ON i2.id = pm.invoice_id
+                    WHERE i2.subscriber_id = s.id AND i2.status != 'paid'), 0) AS outstanding
+    FROM isp_subscribers s
+    LEFT JOIN isp_plans p ON p.id = s.plan_id
+    LEFT JOIN isp_routers r ON r.id = s.router_id
+    ORDER BY s.name`);
+  rows = rows.map((s) => {
+    const live = subStatus(s);
+    const days_left = s.expiry_date
+      ? Math.round((new Date(s.expiry_date + 'T00:00:00Z') - new Date(today() + 'T00:00:00Z')) / 86400000)
+      : null;
+    return { ...s, live_status: live, days_left };
+  });
+  if (status) rows = rows.filter((s) => s.live_status === status);
+  if (q) {
+    const needle = String(q).toLowerCase();
+    rows = rows.filter((s) => (s.name + ' ' + (s.phone || '') + ' ' + (s.pppoe_user || '')).toLowerCase().includes(needle));
+  }
+  res.json(rows);
+}));
+api.post('/isp/subscribers', h(async (req, res) => {
+  const { name, phone, pppoe_user, location, router_id, plan_id, note, start_date } = req.body || {};
+  if (!name) return res.status(400).json({ error: 'Name required' });
+  let expiry = null;
+  if (plan_id) {
+    const plan = await db.get('SELECT * FROM isp_plans WHERE id = ?', plan_id);
+    if (plan) expiry = addDays(start_date || today(), plan.validity_days);
+  }
+  const info = await db.run(
+    'INSERT INTO isp_subscribers (name, phone, pppoe_user, location, router_id, plan_id, status, expiry_date, note, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+    name, phone || '', pppoe_user || '', location || '', router_id || null, plan_id || null, 'active', expiry, note || '', req.user.username);
+  res.json({ id: info.lastInsertRowid });
+}));
+api.put('/isp/subscribers/:id', h(async (req, res) => {
+  const { name, phone, pppoe_user, location, router_id, plan_id, status, note } = req.body || {};
+  await db.run(
+    'UPDATE isp_subscribers SET name=?, phone=?, pppoe_user=?, location=?, router_id=?, plan_id=?, status=?, note=? WHERE id=?',
+    name, phone || '', pppoe_user || '', location || '', router_id || null, plan_id || null,
+    status === 'suspended' ? 'suspended' : 'active', note || '', req.params.id);
+  res.json({ ok: true });
+}));
+api.delete('/isp/subscribers/:id', h(async (req, res) => {
+  const out = (await db.get(`SELECT
+    COALESCE((SELECT SUM(amount) FROM isp_invoices WHERE subscriber_id = ? AND status != 'paid'), 0) AS n`, req.params.id)).n;
+  if (out > 0.0001) return res.status(400).json({ error: 'Subscriber still has unpaid invoices' });
+  await db.run('DELETE FROM isp_subscribers WHERE id = ?', req.params.id);
+  res.json({ ok: true });
+}));
+
+// renew/activate a subscriber: take payment now, extend expiry, record income
+api.post('/isp/subscribers/:id/renew', h(async (req, res) => {
+  const { date, amount, method } = req.body || {};
+  const s = await db.get('SELECT * FROM isp_subscribers WHERE id = ?', req.params.id);
+  if (!s) return res.status(404).json({ error: 'Subscriber not found' });
+  if (!s.plan_id) return res.status(400).json({ error: 'Assign a plan before renewing' });
+  const plan = await db.get('SELECT * FROM isp_plans WHERE id = ?', s.plan_id);
+  if (!plan) return res.status(400).json({ error: 'Plan not found' });
+
+  const d = date || today();
+  const pay = amount === undefined || amount === '' || amount === null ? plan.price : Number(amount);
+  if (Number.isNaN(pay) || pay < 0) return res.status(400).json({ error: 'Amount invalid' });
+
+  // extend from whichever is later: today or the current (not-yet-expired) expiry
+  const base = s.expiry_date && s.expiry_date > d ? s.expiry_date : d;
+  const newExpiry = addDays(base, plan.validity_days);
+  const period = d.slice(0, 7);
+
+  const inv = await db.run(
+    'INSERT INTO isp_invoices (subscriber_id, plan_id, date, due_date, amount, period, status, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+    s.id, plan.id, d, d, plan.price, period, pay >= plan.price - 0.0001 ? 'paid' : 'unpaid', req.user.username);
+  if (pay > 0) {
+    await db.run('INSERT INTO isp_payments (invoice_id, subscriber_id, date, amount, method, created_by) VALUES (?, ?, ?, ?, ?, ?)',
+      inv.lastInsertRowid, s.id, d, pay, method || 'cash', req.user.username);
+    await db.run('INSERT INTO income (date, source, description, amount, method, created_by) VALUES (?, ?, ?, ?, ?, ?)',
+      d, 'Internet', `${plan.name} · ${s.name}`, pay, method || 'cash', req.user.username);
+  }
+  await db.run('UPDATE isp_subscribers SET status = ?, expiry_date = ? WHERE id = ?', 'active', newExpiry, s.id);
+  res.json({ ok: true, expiry_date: newExpiry, invoice_id: inv.lastInsertRowid });
+}));
+
+// ----- invoices -----
+api.get('/isp/invoices', h(async (req, res) => {
+  const { status, subscriber_id } = req.query;
+  let sql = `
+    SELECT i.*, s.name AS subscriber_name, s.phone AS subscriber_phone, p.name AS plan_name,
+      COALESCE((SELECT SUM(amount) FROM isp_payments WHERE invoice_id = i.id), 0) AS paid
+    FROM isp_invoices i
+    JOIN isp_subscribers s ON s.id = i.subscriber_id
+    LEFT JOIN isp_plans p ON p.id = i.plan_id`;
+  const params = [];
+  if (subscriber_id) { sql += ' WHERE i.subscriber_id = ?'; params.push(subscriber_id); }
+  sql += ' ORDER BY i.date DESC, i.id DESC';
+  let rows = await db.all(sql, ...params);
+  rows = rows.map((r) => ({ ...r, outstanding: r.amount - r.paid }));
+  if (status === 'unpaid') rows = rows.filter((r) => r.outstanding > 0.0001);
+  if (status === 'paid') rows = rows.filter((r) => r.outstanding <= 0.0001);
+  res.json(rows);
+}));
+
+// bulk-create this month's invoices for active subscribers (skip ones already billed for the period)
+api.post('/isp/invoices/generate', h(async (req, res) => {
+  const d = (req.body && req.body.date) || today();
+  const period = d.slice(0, 7);
+  const subs = await db.all('SELECT * FROM isp_subscribers WHERE plan_id IS NOT NULL AND status != ?', 'suspended');
+  let created = 0;
+  for (const s of subs) {
+    const exists = await db.get('SELECT id FROM isp_invoices WHERE subscriber_id = ? AND period = ?', s.id, period);
+    if (exists) continue;
+    const plan = await db.get('SELECT * FROM isp_plans WHERE id = ?', s.plan_id);
+    if (!plan) continue;
+    await db.run(
+      'INSERT INTO isp_invoices (subscriber_id, plan_id, date, due_date, amount, period, status, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+      s.id, plan.id, d, addDays(d, 7), plan.price, period, 'unpaid', req.user.username);
+    created += 1;
+  }
+  res.json({ created, period });
+}));
+
+// pay an invoice: record payment + income; if fully paid, extend the subscriber's expiry
+api.post('/isp/invoices/:id/pay', h(async (req, res) => {
+  const { date, amount, method } = req.body || {};
+  const inv = await db.get('SELECT * FROM isp_invoices WHERE id = ?', req.params.id);
+  if (!inv) return res.status(404).json({ error: 'Invoice not found' });
+  const paidSoFar = (await db.get('SELECT COALESCE(SUM(amount),0) n FROM isp_payments WHERE invoice_id = ?', inv.id)).n;
+  const outstanding = inv.amount - paidSoFar;
+  if (outstanding <= 0.0001) return res.status(400).json({ error: 'Invoice already settled' });
+
+  const d = date || today();
+  let pay = amount === undefined || amount === '' || amount === null ? outstanding : Number(amount);
+  if (Number.isNaN(pay) || pay <= 0) return res.status(400).json({ error: 'Amount required' });
+  if (pay > outstanding) pay = outstanding;
+
+  const s = await db.get('SELECT * FROM isp_subscribers WHERE id = ?', inv.subscriber_id);
+  await db.run('INSERT INTO isp_payments (invoice_id, subscriber_id, date, amount, method, created_by) VALUES (?, ?, ?, ?, ?, ?)',
+    inv.id, inv.subscriber_id, d, pay, method || 'cash', req.user.username);
+  await db.run('INSERT INTO income (date, source, description, amount, method, created_by) VALUES (?, ?, ?, ?, ?, ?)',
+    d, 'Internet', `Invoice #${inv.id} · ${s ? s.name : ''}`, pay, method || 'cash', req.user.username);
+
+  const fullyPaid = paidSoFar + pay >= inv.amount - 0.0001;
+  if (fullyPaid) {
+    await db.run('UPDATE isp_invoices SET status = ? WHERE id = ?', 'paid', inv.id);
+    const plan = inv.plan_id ? await db.get('SELECT * FROM isp_plans WHERE id = ?', inv.plan_id) : null;
+    if (s && plan) {
+      const base = s.expiry_date && s.expiry_date > d ? s.expiry_date : d;
+      await db.run('UPDATE isp_subscribers SET status = ?, expiry_date = ? WHERE id = ?',
+        'active', addDays(base, plan.validity_days), s.id);
+    }
+  }
+  res.json({ ok: true, applied: pay, fully_paid: fullyPaid });
+}));
+
+api.delete('/isp/invoices/:id', h(async (req, res) => {
+  await db.run('DELETE FROM isp_payments WHERE invoice_id = ?', req.params.id);
+  await db.run('DELETE FROM isp_invoices WHERE id = ?', req.params.id);
+  res.json({ ok: true });
+}));
+
+// ----- hotspot vouchers -----
+api.get('/isp/vouchers', h(async (req, res) => {
+  const { batch, status } = req.query;
+  let sql = 'SELECT * FROM isp_vouchers';
+  const where = [];
+  const params = [];
+  if (batch) { where.push('batch = ?'); params.push(batch); }
+  if (status) { where.push('status = ?'); params.push(status); }
+  if (where.length) sql += ' WHERE ' + where.join(' AND ');
+  sql += ' ORDER BY created_at DESC, id DESC';
+  res.json(await db.all(sql, ...params));
+}));
+api.post('/isp/vouchers/generate', h(async (req, res) => {
+  const { count, price, validity_days } = req.body || {};
+  const n = Math.min(Math.max(Number(count) || 0, 1), 500);
+  const p = Number(price) || 0;
+  const v = Number(validity_days) || 1;
+  const batch = 'B' + Date.now().toString(36).toUpperCase();
+  const gen = () => Array.from({ length: 8 }, () => 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'[Math.floor(Math.random() * 32)]).join('');
+  const codes = [];
+  for (let i = 0; i < n; i++) {
+    let code = gen();
+    // extremely unlikely collision; retry a couple times rather than fail the batch
+    for (let tries = 0; tries < 3; tries++) {
+      const dup = await db.get('SELECT id FROM isp_vouchers WHERE code = ?', code);
+      if (!dup) break;
+      code = gen();
+    }
+    await db.run('INSERT INTO isp_vouchers (batch, code, price, validity_days, status, created_by) VALUES (?, ?, ?, ?, ?, ?)',
+      batch, code, p, v, 'unused', req.user.username);
+    codes.push(code);
+  }
+  res.json({ batch, count: codes.length, codes });
+}));
+// mark a voucher sold/used → counts its price as Internet income
+api.post('/isp/vouchers/:id/use', h(async (req, res) => {
+  const vch = await db.get('SELECT * FROM isp_vouchers WHERE id = ?', req.params.id);
+  if (!vch) return res.status(404).json({ error: 'Voucher not found' });
+  if (vch.status === 'used') return res.status(400).json({ error: 'Voucher already used' });
+  const d = (req.body && req.body.date) || today();
+  await db.run('UPDATE isp_vouchers SET status = ?, used_date = ? WHERE id = ?', 'used', d, vch.id);
+  if (vch.price > 0) {
+    await db.run('INSERT INTO income (date, source, description, amount, method, created_by) VALUES (?, ?, ?, ?, ?, ?)',
+      d, 'Internet', `Hotspot voucher ${vch.code}`, vch.price, 'cash', req.user.username);
+  }
+  res.json({ ok: true });
+}));
+api.delete('/isp/vouchers/:id', h(async (req, res) => {
+  await db.run('DELETE FROM isp_vouchers WHERE id = ?', req.params.id);
+  res.json({ ok: true });
+}));
+
+// ----- ISP dashboard stats -----
+api.get('/isp/stats', h(async (req, res) => {
+  const t = today();
+  const monthStart = t.slice(0, 8) + '01';
+  const soon = addDays(t, 7);
+  const subs = await db.all('SELECT s.*, p.price AS plan_price, p.name AS plan_name FROM isp_subscribers s LEFT JOIN isp_plans p ON p.id = s.plan_id');
+
+  let active = 0, expired = 0, suspended = 0, mrr = 0;
+  const expiringSoon = [];
+  for (const s of subs) {
+    const live = subStatus(s);
+    if (live === 'active') { active += 1; mrr += s.plan_price || 0; }
+    else if (live === 'expired') expired += 1;
+    else if (live === 'suspended') suspended += 1;
+    if (live === 'active' && s.expiry_date && s.expiry_date <= soon) {
+      expiringSoon.push({ id: s.id, name: s.name, plan_name: s.plan_name, expiry_date: s.expiry_date });
+    }
+  }
+  expiringSoon.sort((a, b) => (a.expiry_date < b.expiry_date ? -1 : 1));
+
+  const sum = async (sql, ...p) => (await db.get(sql, ...p)).n || 0;
+  const revenue_month = await sum('SELECT COALESCE(SUM(amount),0) n FROM isp_payments WHERE date >= ?', monthStart);
+  const overdue = (await db.all(`
+    SELECT i.*, s.name AS subscriber_name,
+      COALESCE((SELECT SUM(amount) FROM isp_payments WHERE invoice_id = i.id), 0) AS paid
+    FROM isp_invoices i JOIN isp_subscribers s ON s.id = i.subscriber_id
+    WHERE i.status != 'paid' AND i.due_date IS NOT NULL AND i.due_date < ?
+    ORDER BY i.due_date`, t))
+    .map((r) => ({ ...r, outstanding: r.amount - r.paid }))
+    .filter((r) => r.outstanding > 0.0001);
+
+  const vouchers = {
+    unused: await sum("SELECT COUNT(*) n FROM isp_vouchers WHERE status = 'unused'"),
+    revenue_month: await sum("SELECT COALESCE(SUM(price),0) n FROM isp_vouchers WHERE status = 'used' AND used_date >= ?", monthStart),
+  };
+
+  res.json({ active, expired, suspended, mrr, revenue_month, expiring_soon: expiringSoon, overdue, vouchers });
 }));
 
 app.use('/api', api);

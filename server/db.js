@@ -180,6 +180,85 @@ export async function initDb() {
       created_by  TEXT,
       created_at  TEXT NOT NULL DEFAULT (datetime('now'))
     );
+
+    -- ===================== ISP / internet billing =====================
+    -- Internet service plans (PPPoE or hotspot): speed, monthly price, validity.
+    CREATE TABLE IF NOT EXISTS isp_plans (
+      id            INTEGER PRIMARY KEY AUTOINCREMENT,
+      name          TEXT NOT NULL,
+      speed_mbps    INTEGER NOT NULL DEFAULT 0,
+      price         REAL NOT NULL DEFAULT 0,
+      validity_days INTEGER NOT NULL DEFAULT 30,
+      kind          TEXT NOT NULL DEFAULT 'pppoe',
+      active        INTEGER NOT NULL DEFAULT 1,
+      created_at    TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    -- Router registry (a clean seam for future live MikroTik control).
+    CREATE TABLE IF NOT EXISTS isp_routers (
+      id         INTEGER PRIMARY KEY AUTOINCREMENT,
+      name       TEXT NOT NULL,
+      location   TEXT,
+      host       TEXT,
+      note       TEXT,
+      active     INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    -- Internet subscribers: who has a connection, on which plan, when it expires.
+    CREATE TABLE IF NOT EXISTS isp_subscribers (
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      name        TEXT NOT NULL,
+      phone       TEXT,
+      pppoe_user  TEXT,
+      location    TEXT,
+      router_id   INTEGER,
+      plan_id     INTEGER,
+      status      TEXT NOT NULL DEFAULT 'active',
+      expiry_date TEXT,
+      note        TEXT,
+      created_by  TEXT,
+      created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    -- One bill for a subscriber's billing period.
+    CREATE TABLE IF NOT EXISTS isp_invoices (
+      id            INTEGER PRIMARY KEY AUTOINCREMENT,
+      subscriber_id INTEGER NOT NULL,
+      plan_id       INTEGER,
+      date          TEXT NOT NULL,
+      due_date      TEXT,
+      amount        REAL NOT NULL DEFAULT 0,
+      period        TEXT,
+      status        TEXT NOT NULL DEFAULT 'unpaid',
+      created_by    TEXT,
+      created_at    TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    -- Payments against an ISP invoice.
+    CREATE TABLE IF NOT EXISTS isp_payments (
+      id            INTEGER PRIMARY KEY AUTOINCREMENT,
+      invoice_id    INTEGER NOT NULL,
+      subscriber_id INTEGER,
+      date          TEXT NOT NULL,
+      amount        REAL NOT NULL,
+      method        TEXT NOT NULL DEFAULT 'cash',
+      created_by    TEXT,
+      created_at    TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    -- Prepaid hotspot vouchers, generated in batches.
+    CREATE TABLE IF NOT EXISTS isp_vouchers (
+      id            INTEGER PRIMARY KEY AUTOINCREMENT,
+      batch         TEXT,
+      code          TEXT UNIQUE NOT NULL,
+      price         REAL NOT NULL DEFAULT 0,
+      validity_days INTEGER NOT NULL DEFAULT 1,
+      status        TEXT NOT NULL DEFAULT 'unused',
+      used_date     TEXT,
+      created_by    TEXT,
+      created_at    TEXT NOT NULL DEFAULT (datetime('now'))
+    );
   `);
 
   // migrations for DBs created by an earlier version

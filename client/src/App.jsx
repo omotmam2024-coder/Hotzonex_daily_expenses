@@ -3,6 +3,7 @@ import { getToken, getUser, clearSession } from './api.js';
 import Login from './pages/Login.jsx';
 import Dashboard from './pages/Dashboard.jsx';
 import Shop from './pages/Shop.jsx';
+import Internet from './pages/Internet.jsx';
 import Money from './pages/Money.jsx';
 import People from './pages/People.jsx';
 import ReportsHub from './pages/ReportsHub.jsx';
@@ -11,6 +12,7 @@ import Settings from './pages/Settings.jsx';
 const NAV = [
   { id: 'dashboard', label: 'Dashboard', icon: '📊', C: Dashboard },
   { id: 'shop', label: 'Shop & Bar', icon: '🍺', C: Shop },
+  { id: 'internet', label: 'Internet / ISP', icon: '🌐', C: Internet },
   { id: 'money', label: 'Expenses & Income', icon: '💸', C: Money },
   { id: 'people', label: 'Customers & Debts', icon: '📒', C: People },
   { id: 'reports', label: 'Reports & Cash-up', icon: '📈', C: ReportsHub },
